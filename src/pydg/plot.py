@@ -13,11 +13,14 @@ class Plot:
         xs = np.repeat(xs, 2)
         xs = xs[1:-1]
 
-        h_poss = [U.h.positive_limit() for U in state]
-        h_negs = [U.h.negative_limit() for U in state]
-
-        hs = [val for pair in zip(h_poss, h_negs) for val in pair]
+        Us = state.piecewise()
 
         plt.clf()
-        plt.plot(xs, hs)
+        plt.subplot(211)
+        plt.plot(xs, [U.h for U in Us])
+        plt.subplot(212)
+        plt.plot(xs, [U.q for U in Us])
         plt.pause(1e-4)
+
+    def block(self):
+        plt.show(block=True)

@@ -6,7 +6,7 @@ class HLL:
         self.velocity = physics.velocity
         self.celerity = physics.celerity
         self.g = physics.g
-        self.physical_flux = physics.flux
+        self.physical_flux = physics.flux_from_velocity
 
     def __call__(self, U_neg, U_pos):
         if all([self.dry(U) for U in (U_neg, U_pos)]):

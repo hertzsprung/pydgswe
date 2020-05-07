@@ -12,10 +12,14 @@ class Plane:
     const: float = 0.0
     slope: float = 0.0
 
-    def negative_limit(self):
+    @staticmethod
+    def zero():
+        return Plane()
+
+    def neg_limit(self):
         return self.const + sqrt(3)*self.slope
 
-    def positive_limit(self):
+    def pos_limit(self):
         return self.const - sqrt(3)*self.slope
 
     def gauss_west(self):
@@ -59,6 +63,13 @@ class FlowCoeffs:
     h: Plane = field(default_factory=Plane)
     q: Plane = field(default_factory=Plane)
 
+    @staticmethod
+    def zero():
+        return FlowCoeffs()
+
+    def const(self):
+        return FlowVector(self.h.const, self.q.const)
+
     def set_const(self, flow_vector):
         self.h.const = flow_vector.h
         self.q.const = flow_vector.q
@@ -67,23 +78,23 @@ class FlowCoeffs:
         self.h.slope = flow_vector.h
         self.q.slope = flow_vector.q
 
-    def __add__(self, other):
-        return FlowCoeffs(self.h + other.h, self.q + other.q)
+    def neg_limit(self):
+        return FlowVector(self.h.neg_limit(), self.q.neg_limit())
 
-    def __rmul__(self, scalar):
-        return FlowCoeffs(scalar * self.h, scalar * self.q)
-
-    def negative_limit(self):
-        return FlowVector(self.h.negative_limit(), self.q.negative_limit())
-
-    def positive_limit(self):
-        return FlowVector(self.h.positive_limit(), self.q.positive_limit())
+    def pos_limit(self):
+        return FlowVector(self.h.pos_limit(), self.q.pos_limit())
 
     def gauss_west(self):
         return FlowVector(self.h.gauss_west(), self.q.gauss_west())
 
     def gauss_east(self):
         return FlowVector(self.h.gauss_east(), self.q.gauss_east())
+
+    def __add__(self, other):
+        return FlowCoeffs(self.h + other.h, self.q + other.q)
+
+    def __rmul__(self, scalar):
+        return FlowCoeffs(scalar * self.h, scalar * self.q)
 
 @dataclass
 class State:
@@ -92,6 +103,12 @@ class State:
     @staticmethod
     def zeros(geometry):
         return State([FlowCoeffs() for _ in range(geometry.elements)])
+
+    def piecewise(self):
+        U_poss = [U.pos_limit() for U in self]
+        U_negs = [U.neg_limit() for U in self]
+
+        return [val for pair in zip(U_poss, U_negs) for val in pair]
 
     def __add__(self, other):
         return State([U_a + U_b for U_a, U_b in zip(self.Us, other.Us)])
@@ -104,4 +121,14 @@ class State:
 
     def __len__(self):
         return len(self.Us)
+
+@dataclass
+class DEM:
+    zs: List[Plane]
+    zstars: List[float]
+
+    @staticmethod
+    def zeros(geometry):
+        return DEM([Plane() for _ in range(geometry.elements)],
+                [0.0 for _ in range(geometry.elements+1)])
 
