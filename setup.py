@@ -30,7 +30,7 @@ setup(
     # There are some restrictions on what makes a valid project name
     # specification here:
     # https://packaging.python.org/specifications/core-metadata/#name
-    name='pydg',  # Required
+    name='pydgswe',  # Required
 
     # Versions should comply with PEP 440:
     # https://www.python.org/dev/peps/pep-0440/
@@ -71,7 +71,7 @@ setup(
     #
     # This field corresponds to the "Home-Page" metadata field:
     # https://packaging.python.org/specifications/core-metadata/#home-page-optional
-    url='https://github.com/hertzsprung/pydg',  # Optional
+    url='https://github.com/hertzsprung/pydgswe',  # Optional
 
     # This should be your name or the name of the organization which owns the
     # project.
@@ -178,7 +178,7 @@ setup(
     # executes the function `main` from this package when invoked:
     entry_points={  # Optional
         'console_scripts': [
-            'pydg=pydg.__main__:main',
+            'pydgswe=pydgswe.__main__:main',
         ],
     },
 
@@ -192,7 +192,7 @@ setup(
     # maintainers, and where to support the project financially. The key is
     # what's used to render the link text on PyPI.
     project_urls={  # Optional
-        'Bug Reports': 'https://github.com/hertzsprung/pydg/issues',
-        'Source': 'https://github.com/hertzsprung/pydg/',
+        'Bug Reports': 'https://github.com/hertzsprung/pydgswe/issues',
+        'Source': 'https://github.com/hertzsprung/pydgswe/',
     },
 )
