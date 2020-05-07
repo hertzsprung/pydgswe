@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from math import sqrt
 from . import DEM, FlowVector, FlowCoeffs, Geometry, HLL, State, Plane
+from . import ParabolicBowlLiangMarche
 from . import Plot
 
 class RungeKutta2:
@@ -70,6 +71,7 @@ class Physics:
 
 class DG2SpatialOperator:
     def __init__(self, riemann_solver, geometry, dem, physics):
+        self.g = physics.g
         self.riemann_solver = riemann_solver
         self.dx = geometry.dx
         self.zs = dem.zs
@@ -90,19 +92,33 @@ class DG2SpatialOperator:
                 in zip(state, state[1:], self.zs, self.zs[1:], self.zstars[1:])]
         Fs += [FlowVector()] # FIXME: eastern BC
 
-        return State([self.L(self.star_coeffs(U, z, zstar_w, zstar_e), F_w, F_e)
+        return State([self.L(U, z, zstar_w, zstar_e, F_w, F_e)
             for U, z, zstar_w, zstar_e, F_w, F_e
             in zip(state, self.zs, self.zstars, self.zstars[1:], Fs, Fs[1:])])
 
-    def L(self, U, F_w, F_e):
+    def L(self, U, z, zstar_w, zstar_e, F_w, F_e):
+        Ustar = self.star_coeffs(U, z, zstar_w, zstar_e)
         coeffs = FlowCoeffs()
         coeffs.set_const(-(F_e - F_w) / self.dx)
         coeffs.set_slope(-sqrt(3.0) / self.dx * (F_w + F_e
-                - self.gauss_quadrature(U, self.physical_flux)))
+                - self.gauss_quadrature(Ustar, self.physical_flux)))
+        coeffs += self.bed_slope_source(U, Ustar, z, zstar_w, zstar_e)
         return coeffs
 
     def gauss_quadrature(self, U, f):
         return f(U.gauss_west()) + f(U.gauss_east())
+
+    def bed_slope_source(self, U, Ustar, z, zstar_w, zstar_e):
+        zdagger_w = self.zdagger((U.h + z).pos_limit(), zstar_w)
+        zdagger_e = self.zdagger((U.h + z).neg_limit(), zstar_e)
+        zdagger_slope = (zdagger_e - zdagger_w) / (2.0*sqrt(3.0))
+
+        Sb = FlowCoeffs()
+        Sb.q = -2.0*sqrt(3.0) * self.g * Ustar.h * zdagger_slope / self.dx
+        return Sb
+
+    def zdagger(self, eta, zstar):
+        return zstar - max(0.0, -(eta - zstar))
 
 class ZeroDryDischarge:
     def __init__(self, physics):
@@ -116,27 +132,25 @@ class ZeroDryDischarge:
         return state
 
 def main():
-    end_time = 20.0
     t = 0.0
-    dt = 0.1
+    dt = 1.0
     physics = Physics()
     riemann_solver = HLL(physics)
-    geometry = Geometry(elements=40, dx=20.0)
-    dem = DEM.zeros(geometry)
-    L = DG2SpatialOperator(riemann_solver, geometry, dem, physics)
+    case = ParabolicBowlLiangMarche(physics)
+    L = DG2SpatialOperator(riemann_solver, case.geometry, case.dem, physics)
     zero_dry_discharge = ZeroDryDischarge(physics)
     rk2 = RungeKutta2(L, zero_dry_discharge)
 
-    state = State.zeros(geometry)
-    for i, U in enumerate(state):
-        U.h.const = 1.0 if i > 10 and i < 20 else 0
+    state = case.state
+    plot = Plot(case.geometry, case.dem)
 
-    plot = Plot(geometry)
-
-    while t < end_time:
+    c = 0
+    while t < case.end_time:
         state = rk2(state, dt)
         t += dt
-        print(t)
-        plot(state)
+        c += 1
+        print("t=", t, "mass=", state.total_mass())
+        if c % 50 == 0:
+            plot(state)
 
     plot.block()
