@@ -5,8 +5,11 @@ import numpy as np
 
 def initialise(geometry, f):
     p_interfaces = [f(x) for x in geometry.interfaces()]
-    return [Plane(const=0.5*(p_w+p_e), slope=0.5/sqrt(3.0)*(p_e-p_w))
+    return [Plane(const=0.5*(p_w+p_e), slope=slope(p_w, p_e))
             for p_w, p_e in zip(p_interfaces, p_interfaces[1:])]
+
+def slope(value_w, value_e):
+    return 0.5/sqrt(3.0)*(value_e - value_w)
 
 def piecewise(planes):
     ps_pos = [p.pos_limit() for p in planes]
@@ -144,11 +147,17 @@ class State:
     def total_mass(self):
         return sum([U.h.const for U in self])
 
+    def total_dry(self, physics):
+        return sum([1 for U in self if physics.dry(U.const())])
+
+    def total_wet(self, physics):
+        return sum([1 for U in self if not physics.dry(U.const())])
+
     def __add__(self, other):
         return State([U_a + U_b for U_a, U_b in zip(self.Us, other.Us)])
 
     def __rmul__(self, scalar):
-        return State([scalar * U for U in self.Us])
+        return State([scalar * U for U in self])
 
     def __getitem__(self, key):
         return self.Us[key]

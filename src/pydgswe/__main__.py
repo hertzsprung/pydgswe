@@ -1,7 +1,8 @@
 from dataclasses import dataclass
 from math import sqrt
-from . import DEM, FlowVector, FlowCoeffs, Geometry, HLL, State, Plane
-from . import ParabolicBowlLiangMarche
+from . import DEM, FlowVector, FlowCoeffs, Geometry, HLL, State, Plane, slope
+from . import TransmissiveBoundary
+from . import DamBreak, LakeAtRest, ParabolicBowlLiangMarche
 from . import Plot
 
 class RungeKutta2:
@@ -70,7 +71,8 @@ class Physics:
         return coeffs
 
 class DG2SpatialOperator:
-    def __init__(self, riemann_solver, geometry, dem, physics):
+    def __init__(self, riemann_solver, geometry, dem, physics,
+            boundary_condition_l, boundary_condition_r):
         self.g = physics.g
         self.riemann_solver = riemann_solver
         self.dx = geometry.dx
@@ -79,6 +81,8 @@ class DG2SpatialOperator:
         self.physical_flux = physics.flux_from_discharge
         self.star_limit = physics.star_limit
         self.star_coeffs = physics.star_coeffs
+        self.bc_l = boundary_condition_l
+        self.bc_r = boundary_condition_r
 
     def __call__(self, state):
         def solve(U_l, U_r, z_l, z_r, zstar):
@@ -86,11 +90,18 @@ class DG2SpatialOperator:
                 self.star_limit(U_l.neg_limit(), z_l.neg_limit(), zstar),
                 self.star_limit(U_r.pos_limit(), z_r.pos_limit(), zstar))
 
-        Fs = [FlowVector()] # FIXME: western BC
+        Ustar = self.star_coeffs(state[0], self.zs[0], self.zstars[0], self.zstars[1])
+        Ustar_limit = self.star_limit(state[0].pos_limit(), self.zs[0].pos_limit(), self.zstars[0])
+        Fs = [self.riemann_solver(*self.bc_l(Ustar, Ustar_limit))]
+
         Fs += [solve(U_l, U_r, z_l, z_r, zstar)
                 for U_l, U_r, z_l, z_r, zstar
                 in zip(state, state[1:], self.zs, self.zs[1:], self.zstars[1:])]
-        Fs += [FlowVector()] # FIXME: eastern BC
+
+        Ustar = self.star_coeffs(state[-1], self.zs[-1], self.zstars[-2], self.zstars[-1])
+        Ustar_limit = self.star_limit(state[-1].neg_limit(), self.zs[-1].neg_limit(), self.zstars[-1])
+        Fs += [self.riemann_solver(
+            *self.bc_r(Ustar, Ustar_limit)[::-1])]
 
         return State([self.L(U, z, zstar_w, zstar_e, F_w, F_e)
             for U, z, zstar_w, zstar_e, F_w, F_e
@@ -98,6 +109,7 @@ class DG2SpatialOperator:
 
     def L(self, U, z, zstar_w, zstar_e, F_w, F_e):
         Ustar = self.star_coeffs(U, z, zstar_w, zstar_e)
+
         coeffs = FlowCoeffs()
         coeffs.set_const(-(F_e - F_w) / self.dx)
         coeffs.set_slope(-sqrt(3.0) / self.dx * (F_w + F_e
@@ -111,11 +123,11 @@ class DG2SpatialOperator:
     def bed_slope_source(self, U, Ustar, z, zstar_w, zstar_e):
         zdagger_w = self.zdagger((U.h + z).pos_limit(), zstar_w)
         zdagger_e = self.zdagger((U.h + z).neg_limit(), zstar_e)
-        zdagger_slope = (zdagger_e - zdagger_w) / (2.0*sqrt(3.0))
+        zdagger_slope = slope(zdagger_w, zdagger_e)
 
-        Sb = FlowCoeffs()
-        Sb.q = -2.0*sqrt(3.0) * self.g * Ustar.h * zdagger_slope / self.dx
-        return Sb
+        coeffs = FlowCoeffs.zero()
+        coeffs.q = -2.0*sqrt(3.0) * self.g * Ustar.h * zdagger_slope / self.dx
+        return coeffs
 
     def zdagger(self, eta, zstar):
         return zstar - max(0.0, -(eta - zstar))
@@ -133,24 +145,31 @@ class ZeroDryDischarge:
 
 def main():
     t = 0.0
-    dt = 1.0
     physics = Physics()
     riemann_solver = HLL(physics)
-    case = ParabolicBowlLiangMarche(physics)
-    L = DG2SpatialOperator(riemann_solver, case.geometry, case.dem, physics)
+    #case = ParabolicBowlLiangMarche(physics)
+    #case = DamBreak()
+    case = LakeAtRest()
+    L = DG2SpatialOperator(riemann_solver, case.geometry, case.dem, physics,
+            TransmissiveBoundary(), TransmissiveBoundary())
     zero_dry_discharge = ZeroDryDischarge(physics)
     rk2 = RungeKutta2(L, zero_dry_discharge)
 
+    dt = case.dt
     state = case.state
     plot = Plot(case.geometry, case.dem)
+    plot(state)
 
     c = 0
     while t < case.end_time:
         state = rk2(state, dt)
         t += dt
         c += 1
-        print("t=", t, "mass=", state.total_mass())
-        if c % 50 == 0:
+        print("t=", t,
+                "mass=", state.total_mass(),
+                "wet_cells=", state.total_wet(physics),
+                "dry_cells=", state.total_dry(physics))
+        if c % 5 == 0:
             plot(state)
 
     plot.block()
