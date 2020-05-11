@@ -18,11 +18,14 @@ class Plot:
 
         plt.clf()
         plt.subplot(311)
-        plt.plot(self.xs, [z for z in self.zs])
-        plt.plot(self.xs, [z+U.h for z, U in zip(self.zs, Us)])
+        plt.gca().set_title('Elevation')
+        plt.plot(self.xs, [z for z in self.zs], color='C2')
+        plt.plot(self.xs, [z+U.h for z, U in zip(self.zs, Us)], color='C0')
         plt.subplot(312)
+        plt.gca().set_title('Water depth')
         plt.plot(self.xs, [U.h for U in Us])
         plt.subplot(313)
+        plt.gca().set_title('Discharge')
         plt.plot(self.xs, [U.q for U in Us])
         plt.pause(1e-4)
 

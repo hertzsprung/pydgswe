@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from math import sqrt
 from . import DEM, FlowVector, FlowCoeffs, Geometry, HLL, State, Plane, slope
 from . import TransmissiveBoundary
-from . import DamBreak, LakeAtRest, ParabolicBowlLiangMarche
+from . import DamBreak, LakeAtRest, ParabolicBowlLiangMarche, ThinFlow
 from . import Plot
 
 class RungeKutta2:
@@ -156,8 +156,9 @@ def main():
     physics = Physics()
     riemann_solver = HLL(physics)
     #case = ParabolicBowlLiangMarche(physics)
-    case = DamBreak()
+    #case = DamBreak()
     #case = LakeAtRest()
+    case = ThinFlow()
     L = DG2SpatialOperator(riemann_solver, case.geometry, case.dem, physics,
             TransmissiveBoundary(), TransmissiveBoundary())
     zero_dry_discharge = ZeroDryDischarge(physics)
@@ -177,7 +178,7 @@ def main():
                 "mass=", state.total_mass(),
                 "wet_cells=", state.total_wet(physics),
                 "dry_cells=", state.total_dry(physics))
-        if c % 5 == 0:
+        if c % 10 == 0:
             plot(state)
 
     plot.block()
