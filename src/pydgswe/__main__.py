@@ -1,9 +1,6 @@
 from dataclasses import dataclass
 from math import sqrt
-from . import DEM, FlowVector, FlowCoeffs, Geometry, HLL, State, Plane, slope
-from . import TransmissiveBoundary
-from . import DamBreak, LakeAtRest, ParabolicBowlLiangMarche, ThinFlow
-from . import Plot
+from . import *
 
 class RungeKutta2:
     def __init__(self, spatial_op, after_stage_op = None):
@@ -29,12 +26,18 @@ class RungeKutta2:
 class Physics:
     g: float = 9.80665
     depth_threshold: float = 1e-3
+    speed_threshold: float = 1e-12
+    cfl : float = 0.25
+    max_dt : float = 60.0
 
     def dry(self, value):
         if isinstance(value, float):
             return value <= self.depth_threshold
         else:
             return value.h <= self.depth_threshold
+
+    def motionless(self, U):
+        return abs(self.velocity(U)) <= self.speed_threshold 
 
     def velocity(self, U):
         return 0.0 if self.dry(U) else U.q / U.h
@@ -63,13 +66,19 @@ class Physics:
         return FlowVector(hstar, qstar)
 
     def Ustar_coeffs(self, U, z, zstar_w, zstar_e):
-        Ustar_pos = self.Ustar_at_limit(U.pos_limit(), z.pos_limit(), zstar_w)
-        Ustar_neg = self.Ustar_at_limit(U.neg_limit(), z.neg_limit(), zstar_e)
+        Ustar_w = self.Ustar_at_limit(U.pos_limit(), z.pos_limit(), zstar_w)
+        Ustar_e = self.Ustar_at_limit(U.neg_limit(), z.neg_limit(), zstar_e)
 
-        coeffs = FlowCoeffs()
-        coeffs.set_const(0.5*(Ustar_pos + Ustar_neg))
-        coeffs.set_slope((Ustar_neg - Ustar_pos) / (2.0*sqrt(3.0)))
-        return coeffs
+        return FlowCoeffs.reconstruct_from_limits(Ustar_w, Ustar_e)
+
+    def dt(self, U, dx):
+        U = U.const()
+
+        if self.dry(U):
+            return self.max_dt
+        else:
+            return min(self.max_dt,
+                    self.cfl*dx / (abs(self.velocity(U)) + sqrt(self.g*U.h)))
 
 class DG2SpatialOperator:
     def __init__(self, riemann_solver, geometry, dem, physics,
@@ -109,6 +118,15 @@ class DG2SpatialOperator:
         coeffs.set_slope(-sqrt(3.0) / self.dx * (F_w + F_e
                 - self.gauss_quadrature(Ustar, self.physical_flux)))
         coeffs += self.bed_slope_source(U, Ustar, z, zstar_w, zstar_e)
+
+#        if U.h.const > 1e-3:
+#            print("DEM", z, "zstar_w", zstar_w, "zstar_e",zstar_e)
+#            print("h", U.h)
+#            print("F_w", F_w, "F_e", F_e)
+#            print("Ustar", Ustar)
+#            print("flux_gradient", FlowCoeffs(-(F_e - F_w) / self.dx, -sqrt(3.0) / self.dx * (F_w + F_e
+#                - self.gauss_quadrature(Ustar, self.physical_flux))))
+#            print("bed_slope_source", self.bed_slope_source(U, Ustar, z, zstar_w, zstar_e))
         return coeffs
 
     def gauss_quadrature(self, U, f):
@@ -142,12 +160,60 @@ class DG2SpatialOperator:
 
 class ZeroDryDischarge:
     def __init__(self, physics):
-        self.physics = physics
+        self.dry = physics.dry
 
     def __call__(self, state):
         for U in state:
-            if self.physics.dry(U.const()):
+            if self.dry(U.const()):
                 U.q = Plane.zero()
+
+        return state
+
+class ZeroDryDischargeFromLimits:
+    def __init__(self, physics):
+        self.dry = physics.dry
+
+    def __call__(self, state):
+        for U in state:
+            q_w = 0.0 if self.dry(U.pos_limit()) else U.q.pos_limit()
+            q_e = 0.0 if self.dry(U.neg_limit()) else U.q.neg_limit()
+
+            # use conditional to avoid more rounding off... but is it necessary?
+            if self.dry(U.pos_limit()) or self.dry(U.neg_limit()):
+                U.q = Plane.reconstruct_from_limits(q_w, q_e)
+
+        return state
+
+class SplittingImplicitFriction:
+    def __init__(self, physics, manning):
+        self.dry = physics.dry
+        self.motionless = physics.motionless
+        self.velocity = physics.velocity
+        self.g = physics.g
+        self.n = manning
+
+    def __call__(self, state, dt):
+        def friction(U):
+            assert U.h >= 0.0
+
+            u = self.velocity(U)
+            Cf = self.g*self.n*self.n / pow(U.h, 1.0/3.0)
+            Sf = -Cf*abs(u)*u
+            D = 1.0 + 2.0*dt*Cf * abs(u) / U.h
+
+            assert U.q * (U.q - dt*Sf/D) >= 0.0, 'Flow reversed by friction update'
+
+            return U.q + dt*Sf/D
+            
+        for U in state:
+            if self.dry(U.const()) or self.motionless(U.const()):
+                continue
+            
+            q_gauss_west = friction(U.gauss_west())
+            q_gauss_east = friction(U.gauss_east())
+
+            U.q.const = friction(U.const())
+            U.q.slope = 0.5*(q_gauss_east - q_gauss_west)
 
         return state
 
@@ -159,26 +225,36 @@ def main():
     #case = DamBreak()
     #case = LakeAtRest()
     case = ThinFlow()
+    #case = ThinFlowSixElements()
     L = DG2SpatialOperator(riemann_solver, case.geometry, case.dem, physics,
             TransmissiveBoundary(), TransmissiveBoundary())
     zero_dry_discharge = ZeroDryDischarge(physics)
     rk2 = RungeKutta2(L, zero_dry_discharge)
+    friction = lambda state, dt: state
+    #friction = SplittingImplicitFriction(physics, case.manning)
 
     dt = case.dt
     state = case.state
-    plot = Plot(case.geometry, case.dem)
+    plot = Plot(case.geometry, case.dem, physics)
+    plot.dts += [(t, dt)]
     plot(state)
 
     c = 0
     while t < case.end_time:
+        dt = state.min_dt(physics, case.geometry)
+        state = friction(state, dt)
         state = rk2(state, dt)
         t += dt
         c += 1
         print("t=", t,
                 "mass=", state.total_mass(),
                 "wet_cells=", state.total_wet(physics),
-                "dry_cells=", state.total_dry(physics))
-        if c % 10 == 0:
+                "dry_cells=", state.total_dry(physics),
+                "min_dt=", state.min_dt(physics, case.geometry))
+
+        plot.dts += [(t, dt)]
+        if c % 20 == 0:
             plot(state)
 
+    print("total timesteps=", len(plot.dts))
     plot.block()

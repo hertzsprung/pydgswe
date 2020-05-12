@@ -25,6 +25,10 @@ class Geometry:
     def interfaces(self):
         return np.linspace(self.extent[0], self.extent[1], self.elements+1)
 
+    def centres(self):
+        return [0.5*(l+r)
+                for l, r in zip(self.interfaces(), self.interfaces()[1:])]
+
 @dataclass
 class Plane:
     const: float = 0.0
@@ -33,6 +37,10 @@ class Plane:
     @staticmethod
     def zero():
         return Plane()
+
+    @staticmethod
+    def reconstruct_from_limits(value_w, value_e):
+        return Plane(0.5*(value_w + value_e), slope(value_w, value_e))
 
     def neg_limit(self):
         return self.const + sqrt(3)*self.slope
@@ -94,6 +102,13 @@ class FlowCoeffs:
     def zero():
         return FlowCoeffs()
 
+    @staticmethod
+    def reconstruct_from_limits(value_w, value_e):
+        coeffs = FlowCoeffs()
+        coeffs.set_const(0.5*(value_w + value_e))
+        coeffs.set_slope(slope(value_w, value_e))
+        return coeffs
+
     def const(self):
         return FlowVector(self.h.const, self.q.const)
 
@@ -141,6 +156,9 @@ class State:
 
         return State([FlowCoeffs(h, q) for h, q in zip(hs, qs)])
 
+    def min_dt(self, physics, geometry):
+        return min([physics.dt(U, geometry.dx) for U in self])
+
     def piecewise(self):
         return piecewise(self)
 
@@ -165,6 +183,8 @@ class State:
     def __len__(self):
         return len(self.Us)
 
+    __array_priority__ = 10000
+
 class DEM:
     def __init__(self, zs):
         self.zs = zs
@@ -180,6 +200,9 @@ class DEM:
     @staticmethod
     def initialise(geometry, f):
         return DEM(initialise(geometry, f))
+
+    def __getitem__(self, key):
+        return self.zs[key]
 
     def piecewise(self):
         return piecewise(self.zs)
