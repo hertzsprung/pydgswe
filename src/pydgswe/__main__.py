@@ -1,61 +1,12 @@
 from math import sqrt
 import numpy as np
 import matplotlib.pyplot as plt
-from dataclasses import dataclass
+from . import *
 
 def Baseline_Mesh(xmin, xmax, elements):
     x_int = np.linspace(xmin, xmax, elements+1)
     x_centres = [0.5*(x_w+x_e) for x_w, x_e in zip(x_int, x_int[1:])]
     return (x_centres, x_int)
-
-@dataclass
-class BoundaryConditions:
-    reflect_up: float = 1.0
-    reflect_dw: float = 1.0
-    h_imposed_up: float = 0.0
-    q_imposed_up: float = 0.0
-    h_imposed_dw: float = 0.0
-    q_imposed_dw: float = 0.0
-
-    def Add_Ghost_BCs(self, h0, z0, q0, h1, z1, q1):
-        z0_up = z0[0]
-        h0_up = h0[0]
-        q0_up = self.reflect_up*q0[0]
-
-        if self.h_imposed_up > 0.0:
-            h0_up = self.h_imposed_up
-
-        if self.q_imposed_up > 0.0:
-            q0_up = self.q_imposed_up
-
-        h1_up = 0.0
-        z1_up = 0.0
-        q1_up = 0.0
-
-        z0_dw = z0[-1]
-        h0_dw = h0[-1]
-        q0_dw = self.reflect_dw*q0[-1]
-
-        if self.h_imposed_dw > 0.0:
-            h0_dw = self.h_imposed_dw
-
-        if self.q_imposed_dw > 0.0:
-            q0_dw = self.q_imposed_dw
-
-        h1_dw = 0.0
-        z1_dw = 0.0
-        q1_dw = 0.0
-
-        z0_with_bc = [z0_up] + z0 + [z0_dw]
-        h0_with_bc = [h0_up] + h0 + [h0_dw]
-        q0_with_bc = [q0_up] + q0 + [q0_dw]
-        z1_with_bc = [z1_up] + z1 + [z1_dw]
-        h1_with_bc = [h1_up] + h1 + [h1_dw]
-        q1_with_bc = [q1_up] + q1 + [q1_dw]
-
-        return (h0_with_bc, z0_with_bc, q0_with_bc,
-                h1_with_bc, z1_with_bc, q1_with_bc,
-                h0_up, q0_up, h0_dw, q0_dw)
 
 def LFV(ic, _, ndir, z0_temp, z1_temp, h0_temp, h1_temp, q0_temp, q1_temp):
     z0 = z0_temp[ic]
@@ -208,55 +159,68 @@ def DG2_Operator(ic, dx, elements, h_L_up, q_L_up, h_R_dw, q_R_dw,
     return DG2_1D(F_pos, F_neg, z1_bar, h0_bar, h1_bar, q0_bar, q1_bar, dx,
             g, tolh)
 
-def plot(xx, x_interface, z0, z1, h0, h1, q0, q1):
-    plt.clf()
-    plt.plot(xx, z0)
-    plt.plot(xx, [z+h for z, h in zip(z0, h0)])
-    plt.pause(1e-4)
+def friction_implicit(h0, h1, q0, q1, dt, g, tolh, manning, emsmall):
+    h_G1 = h0 + h1
+    h_G2 = h0 - h1
+    q_G1 = q0 - q1
+    q_G2 = q0 + q1
 
-def Bed_Data(xx):
-    zz = 0.0
+    minh = min(h_G1, h0, h_G2)
+    minq = min(q_G1, q0, q_G2)
 
-    if xx >= 22.0 and xx < 25.0:
-        zz = (0.05)*xx - 1.1
-    elif xx >=25.0 and xx <= 28.0:
-        zz = (-0.05)*xx + 1.4
-    elif xx > 8.0 and xx < 12.0:
-        zz = 0.2 - (0.05*(xx-10)**2)
-    elif xx > 39.0 and xx < 46.5:
-        zz = 0.3
-    else:
-        zz = 0.0
-    
-    return 10.0*zz
+    q0_friction = q0
+    q1_friction = q1
 
-def Init_Conds_h(zz, xx):
-    return 2.0 - zz
+    if minh > tolh and abs(minq) > emsmall:
+        u0 = q0/h0
+        Cf0 = g*manning**2/pow(h0, 1.0/3.0)
+        Sf0 = -Cf0*abs(u0)*u0
+        D0 = 1.0 + 2.0*dt*Cf0*abs(u0)/h0
+        q0_friction = q0 + dt*Sf0/D0
 
-def Init_Conds_q(zz, xx):
-    return 0.0
+        u_G1 = q_G1/h_G1
+        Cf_G1 = g*manning**2/pow(h_G1, 1.0/3.0)
+        Sf_G1 = -Cf_G1*abs(u_G1)*u_G1
+        D_G1 = 1.0 + 2.0*dt*Cf_G1*abs(u_G1)/h_G1
+        q_G1_friction = q_G1 + dt*Sf_G1/D_G1
+
+        u_G2 = q_G2/h_G2
+        Cf_G2 = g*manning**2/pow(h_G2, 1.0/3.0)
+        Sf_G2 = -Cf_G2*abs(u_G2)*u_G2
+        D_G2 = 1.0 + 2.0*dt*Cf_G2*abs(u_G2)/h_G2
+        q_G2_friction = q_G2 + dt*Sf_G2/D_G2
+
+        q1_friction = 1.0/2.0 * (q_G1_friction - q_G2_friction)
+        
+    return (q0_friction, q1_friction)
 
 def main():
-    tolh = 1e-7
+    tolh = 1e-3
     emsmall = 1e-12
     time_now = 0.0
     CFL = 0.28
 
-    xmin = 0.0
-    xmax = 50.0
-    elements = 32
-    bcs = BoundaryConditions()
+#    case = LakeAtRest()
+#    case = BuildingOvertopping()
+    case = SheetFlow()
 
-    simulation_time = 0.5
+    xmin = case.xmin
+    xmax = case.xmax
+    elements = 50
+    bcs = case.bcs
+
+    simulation_time = case.simulation_time
     g = 9.80665
-    Manning = 0.0
+    manning = case.manning
 
     dx = (xmax - xmin) / elements
     xx, x_interface = Baseline_Mesh(xmin, xmax, elements)
 
-    z_interface = [Bed_Data(x) for x in x_interface] 
-    h_interface = [Init_Conds_h(z, x) for z, x in zip(z_interface, x_interface)]
-    q_interface = [Init_Conds_q(z, x) for z, x in zip(z_interface, x_interface)]
+    z_interface = [case.Bed_Data(x) for x in x_interface] 
+    h_interface = [case.Init_Conds_h(z, x)
+            for z, x in zip(z_interface, x_interface)]
+    q_interface = [case.Init_Conds_q(z, x)
+            for z, x in zip(z_interface, x_interface)]
 
     z0 = [0.5*(z_w+z_e) for z_w, z_e in zip(z_interface, z_interface[1:])]
     h0 = [0.5*(h_w+h_e) for h_w, h_e in zip(h_interface, h_interface[1:])]
@@ -273,8 +237,9 @@ def main():
 
     plt.ion()
     plt.show()
-    plot(xx, x_interface, z0, z1, h0, h1, q0, q1)
+    plot(xx, x_interface, z0, z1, h0, h1, q0, q1, tolh)
 
+    c = 0
     while time_now < simulation_time:
         time_now += dt
         if time_now - simulation_time > 0:
@@ -301,7 +266,12 @@ def main():
         q0_new_with_bc = q0_with_bc.copy()
         q1_new_with_bc = q1_with_bc.copy()
 
-        # TODO: friction update goes here
+        if manning > 0.0:
+            for i in range(len(h0_with_bc)):
+                q0_friction, q1_friction = friction_implicit(
+                        h0_with_bc[i], h1_with_bc[i],
+                        q0_with_bc[i], q1_with_bc[i], dt,
+                        g, tolh, manning, emsmall)
 
         # RK stage 1
         z0_temp = z0_with_bc.copy()
@@ -391,4 +361,6 @@ def main():
                     dt_G2 = CFL*dx/(abs(u_G2)+sqrt(g*h_G2))
                     dt = min(dt, dt_G2)
 
-        plot(xx, x_interface, z0, z1, h0, h1, q0, q1)
+        c += 1
+        if c % 10 == 0:
+            plot(xx, x_interface, z0, z1, h0, h1, q0, q1, tolh)
