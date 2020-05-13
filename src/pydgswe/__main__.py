@@ -362,5 +362,7 @@ def main():
                     dt = min(dt, dt_G2)
 
         c += 1
-        if c % 10 == 0:
+        if c % 20 == 0:
             plot(xx, x_interface, z0, z1, h0, h1, q0, q1, tolh)
+
+    plt.show(block=True)
