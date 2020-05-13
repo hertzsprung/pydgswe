@@ -199,6 +199,7 @@ def main():
     emsmall = 1e-12
     time_now = 0.0
     CFL = 0.28
+    Krivo_threshold = 10.0
 
 #    case = LakeAtRest()
 #    case = BuildingOvertopping()
@@ -233,6 +234,8 @@ def main():
     q1 = [(q_e-q_w)*(sqrt(3.0)/6.0)
             for q_w, q_e in zip(q_interface, q_interface[1:])]
 
+    h0_max = max(h0)
+    hmin_limiter = h0_max*5.0/100.0
     dt = 0.0001
 
     plt.ion()
@@ -281,6 +284,48 @@ def main():
         q0_temp = q0_with_bc.copy()
         q1_temp = q1_with_bc.copy()
 
+        # slope limiting
+        for i in range(1, elements+1):
+            et0_loc = h0_temp[i] + z0_temp[i]
+            et1_loc = h1_temp[i] + z1_temp[i]
+            et0_bwd = h0_temp[i-1] + z0_temp[i-1]
+            et1_bwd = h1_temp[i-1] + z1_temp[i-1]
+            et0_fwd = h0_temp[i+1] + z0_temp[i+1]
+            et1_fwd = h1_temp[i+1] + z1_temp[i+1]
+            q0_loc = q0_temp[i]
+            q1_loc = q1_temp[i]
+            q0_bwd = q0_temp[i-1]
+            q1_bwd = q1_temp[i-1]
+            q0_fwd = q0_temp[i+1]
+            q1_fwd = q1_temp[i+1]
+
+            h0_loc = h0_temp[i]
+            h_G1_loc = h0_temp[i] + h1_temp[i]
+            h_G2_loc = h0_temp[i] - h1_temp[i]
+            min_h_loc = min(h0_loc, h_G1_loc, h_G2_loc)
+
+            h0_bwd = h0_temp[i-1]
+            h_G1_bwd = h0_temp[i-1]+h1_temp[i-1]
+            h_G2_bwd = h0_temp[i-1]-h1_temp[i-1]
+            min_h_bwd = min(h0_bwd, h_G1_bwd, h_G2_bwd)
+
+            h0_fwd = h0_temp[i+1]
+            h_G1_fwd = h0_temp[i+1]+h1_temp[i+1]
+            h_G2_fwd = h0_temp[i+1]-h1_temp[i+1]
+            min_h_fwd = min(h0_fwd, h_G1_fwd, h_G2_fwd)
+
+            min_h = min(min_h_bwd, min_h_loc, min_h_fwd)
+
+            et1_loc = slope_limiting(et0_loc, et0_bwd, et0_fwd, et1_loc, et1_bwd, et1_fwd, min_h, dx, emsmall, Krivo_threshold, hmin_limiter)
+            q1_loc = slope_limiting(q0_loc, q0_bwd, q0_fwd, q1_loc, q1_bwd, q1_fwd, min_h, dx, emsmall, Krivo_threshold, hmin_limiter)
+
+            h1_temp[i] = et1_loc - z1_temp[i]
+            q1_temp[i] = q1_loc
+
+            h1_with_bc[i] = h1_temp[i]
+            q1_with_bc[i] = q1_temp[i]
+        
+
         for i in range(1, elements+1):
             L0_temp, L1_temp = DG2_Operator(i, dx, elements,
                     h_L_up, q_L_up, h_R_dw, q_R_dw,
@@ -312,6 +357,47 @@ def main():
         h1_temp = h1_int_with_bc
         q0_temp = q0_int_with_bc
         q1_temp = q1_int_with_bc
+
+        # slope limiting
+        for i in range(1, elements+1):
+            et0_loc = h0_temp[i] + z0_temp[i]
+            et1_loc = h1_temp[i] + z1_temp[i]
+            et0_bwd = h0_temp[i-1] + z0_temp[i-1]
+            et1_bwd = h1_temp[i-1] + z1_temp[i-1]
+            et0_fwd = h0_temp[i+1] + z0_temp[i+1]
+            et1_fwd = h1_temp[i+1] + z1_temp[i+1]
+            q0_loc = q0_temp[i]
+            q1_loc = q1_temp[i]
+            q0_bwd = q0_temp[i-1]
+            q1_bwd = q1_temp[i-1]
+            q0_fwd = q0_temp[i+1]
+            q1_fwd = q1_temp[i+1]
+
+            h0_loc = h0_temp[i]
+            h_G1_loc = h0_temp[i] + h1_temp[i]
+            h_G2_loc = h0_temp[i] - h1_temp[i]
+            min_h_loc = min(h0_loc, h_G1_loc, h_G2_loc)
+
+            h0_bwd = h0_temp[i-1]
+            h_G1_bwd = h0_temp[i-1]+h1_temp[i-1]
+            h_G2_bwd = h0_temp[i-1]-h1_temp[i-1]
+            min_h_bwd = min(h0_bwd, h_G1_bwd, h_G2_bwd)
+
+            h0_fwd = h0_temp[i+1]
+            h_G1_fwd = h0_temp[i+1]+h1_temp[i+1]
+            h_G2_fwd = h0_temp[i+1]-h1_temp[i+1]
+            min_h_fwd = min(h0_fwd, h_G1_fwd, h_G2_fwd)
+
+            min_h = min(min_h_bwd, min_h_loc, min_h_fwd)
+
+            et1_loc = slope_limiting(et0_loc, et0_bwd, et0_fwd, et1_loc, et1_bwd, et1_fwd, min_h, dx, emsmall, Krivo_threshold, hmin_limiter)
+            q1_loc = slope_limiting(q0_loc, q0_bwd, q0_fwd, q1_loc, q1_bwd, q1_fwd, min_h, dx, emsmall, Krivo_threshold, hmin_limiter)
+
+            h1_temp[i] = et1_loc - z1_temp[i]
+            q1_temp[i] = q1_loc
+
+            h1_int_with_bc[i] = h1_temp[i]
+            q1_int_with_bc[i] = q1_temp[i]
 
         for i in range(1, elements+1):
             L0_temp, L1_temp = DG2_Operator(i, dx, elements,
@@ -350,16 +436,22 @@ def main():
                 q1[i] = 0.0
                 continue
             else:
-                # TODO: change this to use means, not gauss points
-                if h_G1 > tolh:
-                    u_G1 = q_G1/h_G1
-                    dt_G1 = CFL*dx/(abs(u_G1)+sqrt(g*h_G1))
-                    dt = min(dt, dt_G1)
+                if h0[i] > tolh:
+                    u0 = q0[i]/h0[i]
+                    dt0 = CFL*dx/(abs(u0)+sqrt(g*h0[i]))
+                    dt = min(dt, dt0)
+                #if h_G1 > tolh:
+                #    u_G1 = q_G1/h_G1
+                #    dt_G1 = CFL*dx/(abs(u_G1)+sqrt(g*h_G1))
+                #    dt = min(dt, dt_G1)
 
-                if h_G2 > tolh:
-                    u_G2 = q_G2/h_G2
-                    dt_G2 = CFL*dx/(abs(u_G2)+sqrt(g*h_G2))
-                    dt = min(dt, dt_G2)
+                #if h_G2 > tolh:
+                #    u_G2 = q_G2/h_G2
+                #    dt_G2 = CFL*dx/(abs(u_G2)+sqrt(g*h_G2))
+                #    dt = min(dt, dt_G2)
+
+        h0_max = max(h0)
+        hmin_limiter = h0_max*5.0/100.0
 
         c += 1
         if c % 20 == 0:
