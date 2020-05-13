@@ -1,260 +1,394 @@
-from dataclasses import dataclass
 from math import sqrt
-from . import *
+import numpy as np
+import matplotlib.pyplot as plt
+from dataclasses import dataclass
 
-class RungeKutta2:
-    def __init__(self, spatial_op, after_stage_op = None):
-        if after_stage_op is None:
-            after_stage_op = lambda state: state
-            
-        self.spatial_op = spatial_op
-        self.after_stage_op = after_stage_op
-
-    def __call__(self, state, dt):
-        L = self.spatial_op
-        state_n = state
-
-        state_int = state_n + dt*L(state)
-        state_int = self.after_stage_op(state_int)
-
-        state_new = 0.5*(state_n + state_int + dt*L(state_int))
-        state_new = self.after_stage_op(state_new)
-
-        return state_new
+def Baseline_Mesh(xmin, xmax, elements):
+    x_int = np.linspace(xmin, xmax, elements+1)
+    x_centres = [0.5*(x_w+x_e) for x_w, x_e in zip(x_int, x_int[1:])]
+    return (x_centres, x_int)
 
 @dataclass
-class Physics:
-    g: float = 9.80665
-    depth_threshold: float = 1e-3
-    speed_threshold: float = 1e-12
-    cfl : float = 0.25
-    max_dt : float = 60.0
+class BoundaryConditions:
+    reflect_up: float = 1.0
+    reflect_dw: float = 1.0
+    h_imposed_up: float = 0.0
+    q_imposed_up: float = 0.0
+    h_imposed_dw: float = 0.0
+    q_imposed_dw: float = 0.0
 
-    def dry(self, value):
-        if isinstance(value, float):
-            return value <= self.depth_threshold
-        else:
-            return value.h <= self.depth_threshold
+    def Add_Ghost_BCs(self, h0, z0, q0, h1, z1, q1):
+        z0_up = z0[0]
+        h0_up = h0[0]
+        q0_up = self.reflect_up*q0[0]
 
-    def motionless(self, U):
-        return abs(self.velocity(U)) <= self.speed_threshold 
+        if self.h_imposed_up > 0.0:
+            h0_up = self.h_imposed_up
 
-    def velocity(self, U):
-        return 0.0 if self.dry(U) else U.q / U.h
+        if self.q_imposed_up > 0.0:
+            q0_up = self.q_imposed_up
 
-    def celerity(self, value):
-        if isinstance(value, float):
-            return sqrt(self.g * value)
-        else:
-            return sqrt(self.g * value.h)
+        h1_up = 0.0
+        z1_up = 0.0
+        q1_up = 0.0
 
-    def flux_from_discharge(self, flow_vector):
-        U = flow_vector
-        if self.dry(U):
-            return FlowVector()
-        else:
-            return FlowVector(U.q, U.q*U.q/U.h + 0.5*self.g*U.h*U.h)
+        z0_dw = z0[-1]
+        h0_dw = h0[-1]
+        q0_dw = self.reflect_dw*q0[-1]
 
-    def flux_from_velocity(self, flow_vector):
-        U = flow_vector
-        return FlowVector(U.q, self.velocity(U) * U.q + 0.5*self.g*U.h*U.h)
+        if self.h_imposed_dw > 0.0:
+            h0_dw = self.h_imposed_dw
 
-    def Ustar_at_limit(self, flow_vector, z, zstar):
-        U = flow_vector
-        hstar = max(0.0, z + U.h - zstar)
-        qstar = 0.0 if self.dry(hstar) else hstar * self.velocity(U)
-        return FlowVector(hstar, qstar)
+        if self.q_imposed_dw > 0.0:
+            q0_dw = self.q_imposed_dw
 
-    def Ustar_coeffs(self, U, z, zstar_w, zstar_e):
-        Ustar_w = self.Ustar_at_limit(U.pos_limit(), z.pos_limit(), zstar_w)
-        Ustar_e = self.Ustar_at_limit(U.neg_limit(), z.neg_limit(), zstar_e)
+        h1_dw = 0.0
+        z1_dw = 0.0
+        q1_dw = 0.0
 
-        return FlowCoeffs.reconstruct_from_limits(Ustar_w, Ustar_e)
+        z0_with_bc = [z0_up] + z0 + [z0_dw]
+        h0_with_bc = [h0_up] + h0 + [h0_dw]
+        q0_with_bc = [q0_up] + q0 + [q0_dw]
+        z1_with_bc = [z1_up] + z1 + [z1_dw]
+        h1_with_bc = [h1_up] + h1 + [h1_dw]
+        q1_with_bc = [q1_up] + q1 + [q1_dw]
 
-    def dt(self, U, dx):
-        U = U.const()
+        return (h0_with_bc, z0_with_bc, q0_with_bc,
+                h1_with_bc, z1_with_bc, q1_with_bc,
+                h0_up, q0_up, h0_dw, q0_dw)
 
-        if self.dry(U):
-            return self.max_dt
-        else:
-            return min(self.max_dt,
-                    self.cfl*dx / (abs(self.velocity(U)) + sqrt(self.g*U.h)))
+def LFV(ic, _, ndir, z0_temp, z1_temp, h0_temp, h1_temp, q0_temp, q1_temp):
+    z0 = z0_temp[ic]
+    z1 = z1_temp[ic]
+    h0 = h0_temp[ic]
+    h1 = h1_temp[ic]
+    q0 = q0_temp[ic]
+    q1 = q1_temp[ic]
 
-class DG2SpatialOperator:
-    def __init__(self, riemann_solver, geometry, dem, physics,
-            boundary_condition_l, boundary_condition_r):
-        self.g = physics.g
-        self.riemann_solver = riemann_solver
-        self.dx = geometry.dx
-        self.zs = dem.zs
-        self.zstars = dem.zstars
-        self.physical_flux = physics.flux_from_discharge
-        self.Ustar_at_limit = physics.Ustar_at_limit
-        self.Ustar_coeffs = physics.Ustar_coeffs
-        self.bc_l = boundary_condition_l
-        self.bc_r = boundary_condition_r
+    # Eastern face
+    if ndir == 2:
+        et_face = (h0+z0) + sqrt(3.0)*(z1+h1)
+        q_face = q0 + sqrt(3.0)*q1
+        h_face = h0 + sqrt(3.0)*h1
+        return (h_face, et_face, q_face)
+    # Western face
+    elif ndir == 4:
+        et_face = (h0+z0) - sqrt(3.0)*(z1+h1)
+        q_face = q0 - sqrt(3.0)*q1
+        h_face = h0 - sqrt(3.0)*h1
+        return (h_face, et_face, q_face)
 
-    def __call__(self, state):
-        def solve(U_l, U_r, z_l, z_r, zstar):
-            return self.riemann_solver(
-                self.Ustar_at_limit(U_l.neg_limit(), z_l.neg_limit(), zstar),
-                self.Ustar_at_limit(U_r.pos_limit(), z_r.pos_limit(), zstar))
+def Wetting_Drying_1D(h_L, h_R, et_L, et_R, q_L, q_R, ndir, tolh):
+    z_L = et_L - h_L
+    z_R = et_R - h_R
 
-        Fs = [self.boundary_left(state)]
-        Fs += [solve(U_l, U_r, z_l, z_r, zstar)
-                for U_l, U_r, z_l, z_r, zstar
-                in zip(state, state[1:], self.zs, self.zs[1:], self.zstars[1:])]
-        Fs += [self.boundary_right(state)]
+    u_L = 0.0 if h_L <= tolh else q_L/h_L
+    u_R = 0.0 if h_R <= tolh else q_R/h_R
 
-        return State([self.L(U, z, zstar_w, zstar_e, F_w, F_e)
-            for U, z, zstar_w, zstar_e, F_w, F_e
-            in zip(state, self.zs, self.zstars, self.zstars[1:], Fs, Fs[1:])])
+    z_LR = max(z_L, z_R) # since z could be discontinuous at interface
 
-    def L(self, U, z, zstar_w, zstar_e, F_w, F_e):
-        Ustar = self.Ustar_coeffs(U, z, zstar_w, zstar_e)
+    delta = 0.0
+    if ndir == 2:
+        delta = max(0.0, -(et_L - z_LR))
+    elif ndir == 4:
+        delta = max(0.0, -(et_R - z_LR))
+    else:
+        raise RuntimeError('invalid ndir value')
 
-        coeffs = FlowCoeffs()
-        coeffs.set_const(-(F_e - F_w) / self.dx)
-        coeffs.set_slope(-sqrt(3.0) / self.dx * (F_w + F_e
-                - self.gauss_quadrature(Ustar, self.physical_flux)))
-        coeffs += self.bed_slope_source(U, Ustar, z, zstar_w, zstar_e)
+    h_L_star = max(0.0, et_L - z_LR)
+    q_L_star = u_L * h_L_star
 
-#        if U.h.const > 1e-3:
-#            print("DEM", z, "zstar_w", zstar_w, "zstar_e",zstar_e)
-#            print("h", U.h)
-#            print("F_w", F_w, "F_e", F_e)
-#            print("Ustar", Ustar)
-#            print("flux_gradient", FlowCoeffs(-(F_e - F_w) / self.dx, -sqrt(3.0) / self.dx * (F_w + F_e
-#                - self.gauss_quadrature(Ustar, self.physical_flux))))
-#            print("bed_slope_source", self.bed_slope_source(U, Ustar, z, zstar_w, zstar_e))
-        return coeffs
+    h_R_star = max(0.0, et_R - z_LR)
+    q_R_star = u_R * h_R_star
 
-    def gauss_quadrature(self, U, f):
-        return f(U.gauss_west()) + f(U.gauss_east())
+    z_LR -= delta
 
-    def bed_slope_source(self, U, Ustar, z, zstar_w, zstar_e):
-        zdagger_w = self.zdagger((U.h + z).pos_limit(), zstar_w)
-        zdagger_e = self.zdagger((U.h + z).neg_limit(), zstar_e)
-        zdagger_slope = slope(zdagger_w, zdagger_e)
+    return (z_LR, h_L_star, h_R_star, q_L_star, q_R_star)
 
-        coeffs = FlowCoeffs.zero()
-        coeffs.q = -2.0*sqrt(3.0) * self.g * Ustar.h * zdagger_slope / self.dx
-        return coeffs
+def Flux_F(h, q, g, tolh):
+    F = np.array([0.0, 0.0])
 
-    def zdagger(self, eta, zstar):
-        return zstar - max(0.0, -(eta - zstar))
+    if h > tolh:
+        F[0] = q
+        F[1] = q**2/h + g/2.0 * h**2
 
-    def boundary_left(self, state):
-        Ustar = self.Ustar_coeffs(state[0], self.zs[0],
-                self.zstars[0], self.zstars[1])
-        Ustar_at_limit = self.Ustar_at_limit(
-                state[0].pos_limit(), self.zs[0].pos_limit(), self.zstars[0])
-        return self.riemann_solver(*self.bc_l(Ustar, Ustar_at_limit))
+    return F
 
-    def boundary_right(self, state):
-        Ustar = self.Ustar_coeffs(state[-1], self.zs[-1],
-                self.zstars[-2], self.zstars[-1])
-        Ustar_limit = self.Ustar_at_limit(
-                state[-1].neg_limit(), self.zs[-1].neg_limit(), self.zstars[-1])
-        return self.riemann_solver(*self.bc_r(Ustar, Ustar_limit)[::-1])
+def DG2_1D(F_pos, F_neg, z1, h0, h1, q0, q1, dx, g, tolh):
+    L0 = -(1.0/dx)*((F_pos - F_neg) + np.array([0.0, 2.0*sqrt(3.0)*g*h0*z1]))
+    Flux_Q1 = Flux_F(h0-h1, q0-q1, g, tolh)
+    Flux_Q2 = Flux_F(h0+h1, q0+q1, g, tolh)
+    L1 = -(1.0/dx)*sqrt(3.0) * (F_pos + F_neg - (Flux_Q1 + Flux_Q2) +
+            np.array([0.0, 2.0*g*h1*z1]))
+    return (L0, L1)
 
-class ZeroDryDischarge:
-    def __init__(self, physics):
-        self.dry = physics.dry
+def Flux_HLL(h_L, h_R, q_L, q_R, g, tolh):
+    if h_L <= tolh and h_R <= tolh:
+        return np.array([0.0, 0.0])
 
-    def __call__(self, state):
-        for U in state:
-            if self.dry(U.const()):
-                U.q = Plane.zero()
+    u_L = 0.0 if h_L <= tolh else q_L/h_L
+    u_R = 0.0 if h_R <= tolh else q_R/h_R
 
-        return state
+    a_L = sqrt(g*h_L)
+    a_R = sqrt(g*h_R)
 
-class ZeroDryDischargeFromLimits:
-    def __init__(self, physics):
-        self.dry = physics.dry
+    h_star = ((a_L+a_R)/2.0 + (u_L-u_R)/4.0)**2/g
+    u_star = (u_L+u_R)/2.0 + a_L - a_R
+    a_star = sqrt(g*h_star)
 
-    def __call__(self, state):
-        for U in state:
-            q_w = 0.0 if self.dry(U.pos_limit()) else U.q.pos_limit()
-            q_e = 0.0 if self.dry(U.neg_limit()) else U.q.neg_limit()
+    s_L = u_R-2*a_R if h_L <= tolh else min(u_L-a_L, u_star-a_star)
+    s_R = u_L+2*a_L if h_R <= tolh else max(u_R+a_R, u_star+a_star)
 
-            # use conditional to avoid more rounding off... but is it necessary?
-            if self.dry(U.pos_limit()) or self.dry(U.neg_limit()):
-                U.q = Plane.reconstruct_from_limits(q_w, q_e)
+    F_L = np.array([q_L, u_L*q_L+0.5*g*h_L**2])
+    F_R = np.array([q_R, u_R*q_R+0.5*g*h_R**2])
 
-        return state
+    if s_L >= 0:
+        return F_L
+    elif s_L < 0 and s_R >= 0:
+        return np.array([
+            (s_R*F_L[0]-s_L*F_R[0]+s_L*s_R*(h_R-h_L))/(s_R-s_L),
+            (s_R*F_L[1]-s_L*F_R[1]+s_L*s_R*(q_R-q_L))/(s_R-s_L)
+        ])
+    else:
+        return F_R
 
-class SplittingImplicitFriction:
-    def __init__(self, physics, manning):
-        self.dry = physics.dry
-        self.motionless = physics.motionless
-        self.velocity = physics.velocity
-        self.g = physics.g
-        self.n = manning
+def DG2_Operator(ic, dx, elements, h_L_up, q_L_up, h_R_dw, q_R_dw,
+        z0_temp, z1_temp, h0_temp, h1_temp, q0_temp, q1_temp, g, tolh):
+    # L and R denote the interface limits approaching from the left and right
 
-    def __call__(self, state, dt):
-        def friction(U):
-            assert U.h >= 0.0
+    # Eastern face (pos)
+    h_L, et_L, q_L = LFV(ic, dx, 2,
+            z0_temp, z1_temp, h0_temp, h1_temp, q0_temp, q1_temp)
 
-            u = self.velocity(U)
-            Cf = self.g*self.n*self.n / pow(U.h, 1.0/3.0)
-            Sf = -Cf*abs(u)*u
-            D = 1.0 + 2.0*dt*Cf * abs(u) / U.h
+    h_R = 0.0
+    et_R = 0.0
+    q_R = 0.0
+    if ic == elements: # eastern-most elemnt (ignoring ghosts)
+        h_R = h_R_dw
+        et_R = (et_L-h_L)+h_R
+        q_R = q_R_dw
+    else:
+        h_R, et_R, q_R = LFV(ic+1, dx, 4, 
+            z0_temp, z1_temp, h0_temp, h1_temp, q0_temp, q1_temp)
 
-            assert U.q * (U.q - dt*Sf/D) >= 0.0, 'Flow reversed by friction update'
+    zpos_LR, h_pos_L_star, h_pos_R_star, q_pos_L_star, q_pos_R_star = \
+            Wetting_Drying_1D(h_L, h_R, et_L, et_R, q_L, q_R, 2, tolh)
+    
+    F_pos = Flux_HLL(h_pos_L_star, h_pos_R_star, q_pos_L_star, q_pos_R_star,
+            g, tolh)
+    
+    # Western face (neg)
+    h_R, et_R, q_R = LFV(ic, dx, 4,
+            z0_temp, z1_temp, h0_temp, h1_temp, q0_temp, q1_temp)
 
-            return U.q + dt*Sf/D
-            
-        for U in state:
-            if self.dry(U.const()) or self.motionless(U.const()):
-                continue
-            
-            q_gauss_west = friction(U.gauss_west())
-            q_gauss_east = friction(U.gauss_east())
+    h_L = 0.0
+    et_L = 0.0
+    q_L = 0.0
+    if ic == 1: # western-most element (ignoring ghosts)
+        h_L = h_L_up
+        et_L = (et_R-h_R)+h_L
+        q_L = q_L_up
+    else:
+        h_L, et_L, q_L = LFV(ic-1, dx, 2, 
+            z0_temp, z1_temp, h0_temp, h1_temp, q0_temp, q1_temp)
 
-            U.q.const = friction(U.const())
-            U.q.slope = 0.5*(q_gauss_east - q_gauss_west)
+    zneg_LR, h_neg_L_star, h_neg_R_star, q_neg_L_star, q_neg_R_star = \
+            Wetting_Drying_1D(h_L, h_R, et_L, et_R, q_L, q_R, 4, tolh)
 
-        return state
+    F_neg = Flux_HLL(h_neg_L_star, h_neg_R_star, q_neg_L_star, q_neg_R_star,
+            g, tolh)
+
+    # positivity preserving coefficients (denoted bar)
+    z1_bar = (zpos_LR - zneg_LR)*(sqrt(3.0)/6.0)
+    h0_bar = (h_pos_L_star + h_neg_R_star) / 2.0
+    h1_bar = (h_pos_L_star - h_neg_R_star)*(sqrt(3.0)/6.0)
+    q0_bar = (q_pos_L_star + q_neg_R_star) / 2.0
+    q1_bar = (q_pos_L_star - q_neg_R_star)*(sqrt(3.0)/6.0)
+
+    return DG2_1D(F_pos, F_neg, z1_bar, h0_bar, h1_bar, q0_bar, q1_bar, dx,
+            g, tolh)
+
+def plot(xx, x_interface, z0, z1, h0, h1, q0, q1):
+    plt.clf()
+    plt.plot(xx, z0)
+    plt.plot(xx, [z+h for z, h in zip(z0, h0)])
+    plt.pause(1e-4)
+
+def Bed_Data(xx):
+    zz = 0.0
+
+    if xx >= 22.0 and xx < 25.0:
+        zz = (0.05)*xx - 1.1
+    elif xx >=25.0 and xx <= 28.0:
+        zz = (-0.05)*xx + 1.4
+    elif xx > 8.0 and xx < 12.0:
+        zz = 0.2 - (0.05*(xx-10)**2)
+    elif xx > 39.0 and xx < 46.5:
+        zz = 0.3
+    else:
+        zz = 0.0
+    
+    return 10.0*zz
+
+def Init_Conds_h(zz, xx):
+    return 2.0 - zz
+
+def Init_Conds_q(zz, xx):
+    return 0.0
 
 def main():
-    t = 0.0
-    physics = Physics()
-    riemann_solver = HLL(physics)
-    #case = ParabolicBowlLiangMarche(physics)
-    #case = DamBreak()
-    #case = LakeAtRest()
-    case = ThinFlow()
-    #case = ThinFlowSixElements()
-    L = DG2SpatialOperator(riemann_solver, case.geometry, case.dem, physics,
-            TransmissiveBoundary(), TransmissiveBoundary())
-    zero_dry_discharge = ZeroDryDischarge(physics)
-    rk2 = RungeKutta2(L, zero_dry_discharge)
-    friction = lambda state, dt: state
-    #friction = SplittingImplicitFriction(physics, case.manning)
+    tolh = 1e-7
+    emsmall = 1e-12
+    time_now = 0.0
+    CFL = 0.28
 
-    dt = case.dt
-    state = case.state
-    plot = Plot(case.geometry, case.dem, physics)
-    plot.dts += [(t, dt)]
-    plot(state)
+    xmin = 0.0
+    xmax = 50.0
+    elements = 32
+    bcs = BoundaryConditions()
 
-    c = 0
-    while t < case.end_time:
-        dt = state.min_dt(physics, case.geometry)
-        state = friction(state, dt)
-        state = rk2(state, dt)
-        t += dt
-        c += 1
-        print("t=", t,
-                "mass=", state.total_mass(),
-                "wet_cells=", state.total_wet(physics),
-                "dry_cells=", state.total_dry(physics),
-                "min_dt=", state.min_dt(physics, case.geometry))
+    simulation_time = 0.5
+    g = 9.80665
+    Manning = 0.0
 
-        plot.dts += [(t, dt)]
-        if c % 20 == 0:
-            plot(state)
+    dx = (xmax - xmin) / elements
+    xx, x_interface = Baseline_Mesh(xmin, xmax, elements)
 
-    print("total timesteps=", len(plot.dts))
-    plot.block()
+    z_interface = [Bed_Data(x) for x in x_interface] 
+    h_interface = [Init_Conds_h(z, x) for z, x in zip(z_interface, x_interface)]
+    q_interface = [Init_Conds_q(z, x) for z, x in zip(z_interface, x_interface)]
+
+    z0 = [0.5*(z_w+z_e) for z_w, z_e in zip(z_interface, z_interface[1:])]
+    h0 = [0.5*(h_w+h_e) for h_w, h_e in zip(h_interface, h_interface[1:])]
+    q0 = [0.5*(q_w+q_e) for q_w, q_e in zip(q_interface, q_interface[1:])]
+    
+    z1 = [(z_e-z_w)*(sqrt(3.0)/6.0)
+            for z_w, z_e in zip(z_interface, z_interface[1:])]
+    h1 = [(h_e-h_w)*(sqrt(3.0)/6.0)
+            for h_w, h_e in zip(h_interface, h_interface[1:])]
+    q1 = [(q_e-q_w)*(sqrt(3.0)/6.0)
+            for q_w, q_e in zip(q_interface, q_interface[1:])]
+
+    dt = 0.0001
+
+    plt.ion()
+    plt.show()
+    plot(xx, x_interface, z0, z1, h0, h1, q0, q1)
+
+    while time_now < simulation_time:
+        time_now += dt
+        if time_now - simulation_time > 0:
+            time_now -= dt
+            dt = simulation_time - time_now
+            time_now += dt
+
+        print("t", time_now, "dt", dt)
+
+        h0_with_bc, z0_with_bc, q0_with_bc, \
+                h1_with_bc, z1_with_bc, q1_with_bc, \
+                h_L_up, q_L_up, h_R_dw, q_R_dw \
+                = bcs.Add_Ghost_BCs(h0, z0, q0, h1, z1, q1)
+
+        # intermediate data after RK stage 1
+        h0_int_with_bc = h0_with_bc.copy()
+        h1_int_with_bc = h1_with_bc.copy()
+        q0_int_with_bc = q0_with_bc.copy()
+        q1_int_with_bc = q1_with_bc.copy()
+
+        # new data after RK stage 2
+        h0_new_with_bc = h0_with_bc.copy()
+        h1_new_with_bc = h1_with_bc.copy()
+        q0_new_with_bc = q0_with_bc.copy()
+        q1_new_with_bc = q1_with_bc.copy()
+
+        # TODO: friction update goes here
+
+        # RK stage 1
+        z0_temp = z0_with_bc.copy()
+        z1_temp = z1_with_bc.copy()
+        h0_temp = h0_with_bc.copy()
+        h1_temp = h1_with_bc.copy()
+        q0_temp = q0_with_bc.copy()
+        q1_temp = q1_with_bc.copy()
+
+        for i in range(1, elements+1):
+            L0_temp, L1_temp = DG2_Operator(i, dx, elements,
+                    h_L_up, q_L_up, h_R_dw, q_R_dw,
+                    z0_temp, z1_temp, h0_temp, h1_temp, q0_temp, q1_temp,
+                    g, tolh)
+
+            h0_int_with_bc[i] = h0_with_bc[i] + dt*L0_temp[0]
+            q0_int_with_bc[i] = q0_with_bc[i] + dt*L0_temp[1]
+            h1_int_with_bc[i] = h1_with_bc[i] + dt*L1_temp[0]
+            q1_int_with_bc[i] = q1_with_bc[i] + dt*L1_temp[1]
+
+            if h0_int_with_bc[i] <= tolh:
+                q0_int_with_bc[i] = 0.0
+                q1_int_with_bc[i] = 0.0
+
+        # RK stage 2
+        h0_int_with_bc, _, q0_int_with_bc, \
+                h1_int_with_bc, _, q1_int_with_bc, \
+                h_L_up, q_L_up, h_R_dw, q_R_dw \
+                = bcs.Add_Ghost_BCs(
+                        h0_int_with_bc[1:-1],
+                        z0,
+                        q0_int_with_bc[1:-1],
+                        h1_int_with_bc[1:-1],
+                        z1,
+                        q1_int_with_bc[1:-1])
+
+        h0_temp = h0_int_with_bc
+        h1_temp = h1_int_with_bc
+        q0_temp = q0_int_with_bc
+        q1_temp = q1_int_with_bc
+
+        for i in range(1, elements+1):
+            L0_temp, L1_temp = DG2_Operator(i, dx, elements,
+                    h_L_up, q_L_up, h_R_dw, q_R_dw,
+                    z0_temp, z1_temp, h0_temp, h1_temp, q0_temp, q1_temp,
+                    g, tolh)
+
+            h0_new_with_bc[i] = 0.5*(h0_with_bc[i] + h0_int_with_bc[i]
+                    + dt*L0_temp[0])
+            q0_new_with_bc[i] = 0.5*(q0_with_bc[i] + q0_int_with_bc[i]
+                    + dt*L0_temp[1])
+            h1_new_with_bc[i] = 0.5*(h1_with_bc[i] + h1_int_with_bc[i]
+                    + dt*L1_temp[0])
+            q1_new_with_bc[i] = 0.5*(q1_with_bc[i] + q1_int_with_bc[i]
+                    + dt*L1_temp[1])
+
+            if h0_new_with_bc[i] <= tolh:
+                q0_new_with_bc[i] = 0.0
+                q1_new_with_bc[i] = 0.0
+
+        # calculate next timestep
+        dt = 1e9
+        for i in range(elements):
+            h0[i] = h0_new_with_bc[i+1]
+            q0[i] = q0_new_with_bc[i+1]
+            h1[i] = h1_new_with_bc[i+1]
+            q1[i] = q1_new_with_bc[i+1]
+
+            h_G1 = h0[i] - h1[i]
+            h_G2 = h0[i] + h1[i]
+            q_G1 = q0[i] - q1[i]
+            q_G2 = q0[i] + q1[i]
+
+            if h0[i] <= tolh:
+                q0[i] = 0.0
+                q1[i] = 0.0
+                continue
+            else:
+                # TODO: change this to use means, not gauss points
+                if h_G1 > tolh:
+                    u_G1 = q_G1/h_G1
+                    dt_G1 = CFL*dx/(abs(u_G1)+sqrt(g*h_G1))
+                    dt = min(dt, dt_G1)
+
+                if h_G2 > tolh:
+                    u_G2 = q_G2/h_G2
+                    dt_G2 = CFL*dx/(abs(u_G2)+sqrt(g*h_G2))
+                    dt = min(dt, dt_G2)
+
+        plot(xx, x_interface, z0, z1, h0, h1, q0, q1)
