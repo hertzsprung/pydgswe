@@ -71,6 +71,8 @@ def DG2_1D(F_pos, F_neg, z1, h0, h1, q0, q1, dx, g, tolh):
     Flux_Q2 = Flux_F(h0+h1, q0+q1, g, tolh)
     L1 = -(1.0/dx)*sqrt(3.0) * (F_pos + F_neg - (Flux_Q1 + Flux_Q2) +
             np.array([0.0, 2.0*g*h1*z1]))
+    if h0 < 5.0*tolh:
+        L1 = L1 * 0.0
     return (L0, L1)
 
 def Flux_HLL(h_L, h_R, q_L, q_R, g, tolh):
@@ -234,6 +236,11 @@ def main():
     q1 = [(q_e-q_w)*(sqrt(3.0)/6.0)
             for q_w, q_e in zip(q_interface, q_interface[1:])]
 
+    for i in range(len(h1)):
+        if h1[i] < 5.0*tolh:
+            h1[i] = 0.0
+            q1[i] = 0.0
+
     h0_max = max(h0)
     hmin_limiter = h0_max*5.0/100.0
     dt = 0.0001
@@ -341,6 +348,10 @@ def main():
                 q0_int_with_bc[i] = 0.0
                 q1_int_with_bc[i] = 0.0
 
+            if h1_int_with_bc[i] < 5.0*tolh:
+                h1_int_with_bc[i] = 0.0
+                q1_int_with_bc[i] = 0.0
+
         # RK stage 2
         h0_int_with_bc, _, q0_int_with_bc, \
                 h1_int_with_bc, _, q1_int_with_bc, \
@@ -418,43 +429,47 @@ def main():
                 q0_new_with_bc[i] = 0.0
                 q1_new_with_bc[i] = 0.0
 
+            if h1_new_with_bc[i] < 5.0*tolh:
+                h1_new_with_bc[i] = 0.0
+                q1_new_with_bc[i] = 0.0
+
         # calculate next timestep
-        dt = 1e9
+        dt = 1.0
         for i in range(elements):
             h0[i] = h0_new_with_bc[i+1]
             q0[i] = q0_new_with_bc[i+1]
             h1[i] = h1_new_with_bc[i+1]
             q1[i] = q1_new_with_bc[i+1]
-
-            h_G1 = h0[i] - h1[i]
-            h_G2 = h0[i] + h1[i]
-            q_G1 = q0[i] - q1[i]
-            q_G2 = q0[i] + q1[i]
-
-            if h0[i] <= tolh:
-                q0[i] = 0.0
-                q1[i] = 0.0
-                continue
-            else:
-                if h0[i] > tolh:
-                    u0 = q0[i]/h0[i]
-                    dt0 = CFL*dx/(abs(u0)+sqrt(g*h0[i]))
-                    dt = min(dt, dt0)
-                #if h_G1 > tolh:
-                #    u_G1 = q_G1/h_G1
-                #    dt_G1 = CFL*dx/(abs(u_G1)+sqrt(g*h_G1))
-                #    dt = min(dt, dt_G1)
-
-                #if h_G2 > tolh:
-                #    u_G2 = q_G2/h_G2
-                #    dt_G2 = CFL*dx/(abs(u_G2)+sqrt(g*h_G2))
-                #    dt = min(dt, dt_G2)
+#
+#            h_G1 = h0[i] - h1[i]
+#            h_G2 = h0[i] + h1[i]
+#            q_G1 = q0[i] - q1[i]
+#            q_G2 = q0[i] + q1[i]
+#
+#            if h0[i] <= tolh:
+#                q0[i] = 0.0
+#                q1[i] = 0.0
+#                continue
+#            else:
+#                if h0[i] > tolh:
+#                    u0 = q0[i]/h0[i]
+#                    dt0 = CFL*dx/(abs(u0)+sqrt(g*h0[i]))
+#                    dt = min(dt, dt0)
+#                #if h_G1 > tolh:
+#                #    u_G1 = q_G1/h_G1
+#                #    dt_G1 = CFL*dx/(abs(u_G1)+sqrt(g*h_G1))
+#                #    dt = min(dt, dt_G1)
+#
+#                #if h_G2 > tolh:
+#                #    u_G2 = q_G2/h_G2
+#                #    dt_G2 = CFL*dx/(abs(u_G2)+sqrt(g*h_G2))
+#                #    dt = min(dt, dt_G2)
 
         h0_max = max(h0)
         hmin_limiter = h0_max*5.0/100.0
 
         c += 1
-        if c % 20 == 0:
+        if c % 50 == 0:
             plot(xx, x_interface, z0, z1, h0, h1, q0, q1, tolh)
 
     plt.show(block=True)

@@ -63,6 +63,10 @@ class SheetFlow:
         
     def Init_Conds_h(self, zz, xx):
         return 1.5e-3
+#        if xx > 800.0:
+#            return max(0.0, 290.0-zz)
+#        else:
+#            return 0.0
 
     def Init_Conds_q(self, zz, xx):
         return 0.0
