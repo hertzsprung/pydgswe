@@ -178,7 +178,8 @@ setup(
     # executes the function `main` from this package when invoked:
     entry_points={  # Optional
         'console_scripts': [
-            'pydgswe=pydgswe.__main__:main',
+            'pydgswe=pydgswe.dg2.__main__:main',
+            'pyfvswe=pydgswe.fv1.__main__:main',
         ],
     },
 

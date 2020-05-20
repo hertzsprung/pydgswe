@@ -159,17 +159,8 @@ def DG2_Operator(ic, dx, elements, h_L_up, q_L_up, h_R_dw, q_R_dw,
     return DG2_1D(F_pos, F_neg, z1_bar, h0_bar, h1_bar, q0_bar, q1_bar, dx,
             g, tolh)
 
-def friction_implicit(h0, h1, q0, q1, dt, g, tolh, manning, emsmall):
-    h_G1 = h0 + h1
-    h_G2 = h0 - h1
-    q_G1 = q0 - q1
-    q_G2 = q0 + q1
-
-    minh = min(h_G1, h0, h_G2)
-    minq = min(q_G1, q0, q_G2)
-
+def friction_implicit(h0, q0, dt, g, tolh, manning, emsmall):
     q0_friction = q0
-    q1_friction = q1
 
     if minh > tolh and abs(minq) > emsmall:
         u0 = q0/h0
@@ -177,29 +168,14 @@ def friction_implicit(h0, h1, q0, q1, dt, g, tolh, manning, emsmall):
         Sf0 = -Cf0*abs(u0)*u0
         D0 = 1.0 + 2.0*dt*Cf0*abs(u0)/h0
         q0_friction = q0 + dt*Sf0/D0
-
-        u_G1 = q_G1/h_G1
-        Cf_G1 = g*manning**2/pow(h_G1, 1.0/3.0)
-        Sf_G1 = -Cf_G1*abs(u_G1)*u_G1
-        D_G1 = 1.0 + 2.0*dt*Cf_G1*abs(u_G1)/h_G1
-        q_G1_friction = q_G1 + dt*Sf_G1/D_G1
-
-        u_G2 = q_G2/h_G2
-        Cf_G2 = g*manning**2/pow(h_G2, 1.0/3.0)
-        Sf_G2 = -Cf_G2*abs(u_G2)*u_G2
-        D_G2 = 1.0 + 2.0*dt*Cf_G2*abs(u_G2)/h_G2
-        q_G2_friction = q_G2 + dt*Sf_G2/D_G2
-
-        q1_friction = 1.0/2.0 * (q_G1_friction - q_G2_friction)
         
-    return (q0_friction, q1_friction)
+    return q0_friction
 
 def main():
-    tolh = 1e-3
+    tolh = 1e-6
     emsmall = 1e-12
     time_now = 0.0
-    CFL = 0.28
-    Krivo_threshold = 10.0
+    CFL = 0.5
 
 #    case = LakeAtRest()
 #    case = BuildingOvertopping()
@@ -234,8 +210,6 @@ def main():
     q1 = [(q_e-q_w)*(sqrt(3.0)/6.0)
             for q_w, q_e in zip(q_interface, q_interface[1:])]
 
-    h0_max = max(h0)
-    hmin_limiter = h0_max*5.0/100.0
     dt = 0.0001
 
     plt.ion()
@@ -258,10 +232,10 @@ def main():
                 = bcs.Add_Ghost_BCs(h0, z0, q0, h1, z1, q1)
 
         # intermediate data after RK stage 1
-        h0_int_with_bc = h0_with_bc.copy()
-        h1_int_with_bc = h1_with_bc.copy()
-        q0_int_with_bc = q0_with_bc.copy()
-        q1_int_with_bc = q1_with_bc.copy()
+        h0_new_with_bc = h0_with_bc.copy()
+        h1_new_with_bc = h1_with_bc.copy()
+        q0_new_with_bc = q0_with_bc.copy()
+        q1_new_with_bc = q1_with_bc.copy()
 
         # new data after RK stage 2
         h0_new_with_bc = h0_with_bc.copy()
@@ -271,12 +245,10 @@ def main():
 
         if manning > 0.0:
             for i in range(len(h0_with_bc)):
-                q0_friction, q1_friction = friction_implicit(
-                        h0_with_bc[i], h1_with_bc[i],
-                        q0_with_bc[i], q1_with_bc[i], dt,
+                q0_friction = friction_implicit(
+                        h0_with_bc[i], q0_with_bc[i], dt,
                         g, tolh, manning, emsmall)
 
-        # RK stage 1
         z0_temp = z0_with_bc.copy()
         z1_temp = z1_with_bc.copy()
         h0_temp = h0_with_bc.copy()
@@ -284,135 +256,16 @@ def main():
         q0_temp = q0_with_bc.copy()
         q1_temp = q1_with_bc.copy()
 
-        # slope limiting
-        for i in range(1, elements+1):
-            et0_loc = h0_temp[i] + z0_temp[i]
-            et1_loc = h1_temp[i] + z1_temp[i]
-            et0_bwd = h0_temp[i-1] + z0_temp[i-1]
-            et1_bwd = h1_temp[i-1] + z1_temp[i-1]
-            et0_fwd = h0_temp[i+1] + z0_temp[i+1]
-            et1_fwd = h1_temp[i+1] + z1_temp[i+1]
-            q0_loc = q0_temp[i]
-            q1_loc = q1_temp[i]
-            q0_bwd = q0_temp[i-1]
-            q1_bwd = q1_temp[i-1]
-            q0_fwd = q0_temp[i+1]
-            q1_fwd = q1_temp[i+1]
-
-            h0_loc = h0_temp[i]
-            h_G1_loc = h0_temp[i] + h1_temp[i]
-            h_G2_loc = h0_temp[i] - h1_temp[i]
-            min_h_loc = min(h0_loc, h_G1_loc, h_G2_loc)
-
-            h0_bwd = h0_temp[i-1]
-            h_G1_bwd = h0_temp[i-1]+h1_temp[i-1]
-            h_G2_bwd = h0_temp[i-1]-h1_temp[i-1]
-            min_h_bwd = min(h0_bwd, h_G1_bwd, h_G2_bwd)
-
-            h0_fwd = h0_temp[i+1]
-            h_G1_fwd = h0_temp[i+1]+h1_temp[i+1]
-            h_G2_fwd = h0_temp[i+1]-h1_temp[i+1]
-            min_h_fwd = min(h0_fwd, h_G1_fwd, h_G2_fwd)
-
-            min_h = min(min_h_bwd, min_h_loc, min_h_fwd)
-
-            et1_loc = slope_limiting(et0_loc, et0_bwd, et0_fwd, et1_loc, et1_bwd, et1_fwd, min_h, dx, emsmall, Krivo_threshold, hmin_limiter)
-            q1_loc = slope_limiting(q0_loc, q0_bwd, q0_fwd, q1_loc, q1_bwd, q1_fwd, min_h, dx, emsmall, Krivo_threshold, hmin_limiter)
-
-            h1_temp[i] = et1_loc - z1_temp[i]
-            q1_temp[i] = q1_loc
-
-            h1_with_bc[i] = h1_temp[i]
-            q1_with_bc[i] = q1_temp[i]
-        
-
         for i in range(1, elements+1):
             L0_temp, L1_temp = DG2_Operator(i, dx, elements,
                     h_L_up, q_L_up, h_R_dw, q_R_dw,
                     z0_temp, z1_temp, h0_temp, h1_temp, q0_temp, q1_temp,
                     g, tolh)
 
-            h0_int_with_bc[i] = h0_with_bc[i] + dt*L0_temp[0]
-            q0_int_with_bc[i] = q0_with_bc[i] + dt*L0_temp[1]
-            h1_int_with_bc[i] = h1_with_bc[i] + dt*L1_temp[0]
-            q1_int_with_bc[i] = q1_with_bc[i] + dt*L1_temp[1]
-
-            if h0_int_with_bc[i] <= tolh:
-                q0_int_with_bc[i] = 0.0
-                q1_int_with_bc[i] = 0.0
-
-        # RK stage 2
-        h0_int_with_bc, _, q0_int_with_bc, \
-                h1_int_with_bc, _, q1_int_with_bc, \
-                h_L_up, q_L_up, h_R_dw, q_R_dw \
-                = bcs.Add_Ghost_BCs(
-                        h0_int_with_bc[1:-1],
-                        z0,
-                        q0_int_with_bc[1:-1],
-                        h1_int_with_bc[1:-1],
-                        z1,
-                        q1_int_with_bc[1:-1])
-
-        h0_temp = h0_int_with_bc
-        h1_temp = h1_int_with_bc
-        q0_temp = q0_int_with_bc
-        q1_temp = q1_int_with_bc
-
-        # slope limiting
-        for i in range(1, elements+1):
-            et0_loc = h0_temp[i] + z0_temp[i]
-            et1_loc = h1_temp[i] + z1_temp[i]
-            et0_bwd = h0_temp[i-1] + z0_temp[i-1]
-            et1_bwd = h1_temp[i-1] + z1_temp[i-1]
-            et0_fwd = h0_temp[i+1] + z0_temp[i+1]
-            et1_fwd = h1_temp[i+1] + z1_temp[i+1]
-            q0_loc = q0_temp[i]
-            q1_loc = q1_temp[i]
-            q0_bwd = q0_temp[i-1]
-            q1_bwd = q1_temp[i-1]
-            q0_fwd = q0_temp[i+1]
-            q1_fwd = q1_temp[i+1]
-
-            h0_loc = h0_temp[i]
-            h_G1_loc = h0_temp[i] + h1_temp[i]
-            h_G2_loc = h0_temp[i] - h1_temp[i]
-            min_h_loc = min(h0_loc, h_G1_loc, h_G2_loc)
-
-            h0_bwd = h0_temp[i-1]
-            h_G1_bwd = h0_temp[i-1]+h1_temp[i-1]
-            h_G2_bwd = h0_temp[i-1]-h1_temp[i-1]
-            min_h_bwd = min(h0_bwd, h_G1_bwd, h_G2_bwd)
-
-            h0_fwd = h0_temp[i+1]
-            h_G1_fwd = h0_temp[i+1]+h1_temp[i+1]
-            h_G2_fwd = h0_temp[i+1]-h1_temp[i+1]
-            min_h_fwd = min(h0_fwd, h_G1_fwd, h_G2_fwd)
-
-            min_h = min(min_h_bwd, min_h_loc, min_h_fwd)
-
-            et1_loc = slope_limiting(et0_loc, et0_bwd, et0_fwd, et1_loc, et1_bwd, et1_fwd, min_h, dx, emsmall, Krivo_threshold, hmin_limiter)
-            q1_loc = slope_limiting(q0_loc, q0_bwd, q0_fwd, q1_loc, q1_bwd, q1_fwd, min_h, dx, emsmall, Krivo_threshold, hmin_limiter)
-
-            h1_temp[i] = et1_loc - z1_temp[i]
-            q1_temp[i] = q1_loc
-
-            h1_int_with_bc[i] = h1_temp[i]
-            q1_int_with_bc[i] = q1_temp[i]
-
-        for i in range(1, elements+1):
-            L0_temp, L1_temp = DG2_Operator(i, dx, elements,
-                    h_L_up, q_L_up, h_R_dw, q_R_dw,
-                    z0_temp, z1_temp, h0_temp, h1_temp, q0_temp, q1_temp,
-                    g, tolh)
-
-            h0_new_with_bc[i] = 0.5*(h0_with_bc[i] + h0_int_with_bc[i]
-                    + dt*L0_temp[0])
-            q0_new_with_bc[i] = 0.5*(q0_with_bc[i] + q0_int_with_bc[i]
-                    + dt*L0_temp[1])
-            h1_new_with_bc[i] = 0.5*(h1_with_bc[i] + h1_int_with_bc[i]
-                    + dt*L1_temp[0])
-            q1_new_with_bc[i] = 0.5*(q1_with_bc[i] + q1_int_with_bc[i]
-                    + dt*L1_temp[1])
+            h0_new_with_bc[i] = h0_with_bc[i] + dt*L0_temp[0]
+            q0_new_with_bc[i] = q0_with_bc[i] + dt*L0_temp[1]
+            h1_new_with_bc[i] = h1_with_bc[i] + dt*L1_temp[0]
+            q1_new_with_bc[i] = q1_with_bc[i] + dt*L1_temp[1]
 
             if h0_new_with_bc[i] <= tolh:
                 q0_new_with_bc[i] = 0.0
@@ -440,18 +293,6 @@ def main():
                     u0 = q0[i]/h0[i]
                     dt0 = CFL*dx/(abs(u0)+sqrt(g*h0[i]))
                     dt = min(dt, dt0)
-                #if h_G1 > tolh:
-                #    u_G1 = q_G1/h_G1
-                #    dt_G1 = CFL*dx/(abs(u_G1)+sqrt(g*h_G1))
-                #    dt = min(dt, dt_G1)
-
-                #if h_G2 > tolh:
-                #    u_G2 = q_G2/h_G2
-                #    dt_G2 = CFL*dx/(abs(u_G2)+sqrt(g*h_G2))
-                #    dt = min(dt, dt_G2)
-
-        h0_max = max(h0)
-        hmin_limiter = h0_max*5.0/100.0
 
         c += 1
         if c % 20 == 0:
