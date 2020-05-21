@@ -30,4 +30,10 @@ def plot(xx, x_interface, z0, z1, h0, h1, q0, q1, tolh):
         return 0.0 if h <= tolh else q/h
     plt.plot(xx, [velocity(h, q) for h, q in zip(h0, q0)])
 
+#    for h0, h1, q0, q1 in zip(h0, h1, q0, q1):
+#        if abs(velocity(h0, q0)) > 5.0:
+#            print("h0", h0, "q0", q0, velocity(h0, q0))
+#            print("h_G1", h0+h1, "q_G1", q0+q1, velocity(h0+h1, q0+q1))
+#            print("h_G2", h0-h1, "q_G2", q0-q1, velocity(h0-h1, q0-q1))
+
     plt.pause(1e-4)

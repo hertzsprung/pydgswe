@@ -171,26 +171,24 @@ def friction_implicit(h0, h1, q0, q1, dt, g, tolh, manning, emsmall):
     q0_friction = q0
     q1_friction = q1
 
-    if minh > tolh and abs(minq) > emsmall:
-        u0 = q0/h0
-        Cf0 = g*manning**2/pow(h0, 1.0/3.0)
-        Sf0 = -Cf0*abs(u0)*u0
-        D0 = 1.0 + 2.0*dt*Cf0*abs(u0)/h0
-        q0_friction = q0 + dt*Sf0/D0
-
+    q_G1_friction = 0.0
+    if h_G1 > tolh and abs(q_G1) > emsmall:
         u_G1 = q_G1/h_G1
         Cf_G1 = g*manning**2/pow(h_G1, 1.0/3.0)
         Sf_G1 = -Cf_G1*abs(u_G1)*u_G1
         D_G1 = 1.0 + 2.0*dt*Cf_G1*abs(u_G1)/h_G1
         q_G1_friction = q_G1 + dt*Sf_G1/D_G1
 
+    q_G2_friction = 0.0
+    if h_G2 > tolh and abs(q_G2) > emsmall:
         u_G2 = q_G2/h_G2
         Cf_G2 = g*manning**2/pow(h_G2, 1.0/3.0)
         Sf_G2 = -Cf_G2*abs(u_G2)*u_G2
         D_G2 = 1.0 + 2.0*dt*Cf_G2*abs(u_G2)/h_G2
         q_G2_friction = q_G2 + dt*Sf_G2/D_G2
 
-        q1_friction = 1.0/2.0 * (q_G1_friction - q_G2_friction)
+    q0_friction = 0.5 * (q_G1_friction + q_G2_friction) # in 2D there are 4 Gauss points
+    q1_friction = 0.5 * (q_G1_friction - q_G2_friction)
         
     return (q0_friction, q1_friction)
 
@@ -250,7 +248,17 @@ def main():
             dt = simulation_time - time_now
             time_now += dt
 
-        print("t", time_now, "dt", dt)
+        max_u = 0.0
+        for h0_, h1_, q0_, q1_ in zip(h0, h1, q0, q1):
+            h_G1 = h0_ + h1_
+            q_G1 = q0_ + q1_
+            h_G2 = h0_ - h1_
+            q_G2 = q0_ - q1_
+            u_G1 = q_G1/h_G1 if h_G1 > tolh else 0.0
+            u_G2 = q_G2/h_G2 if h_G2 > tolh else 0.0
+            max_u = max(max_u, abs(u_G1), abs(u_G2))
+
+        print("t", time_now, "dt", dt, "max Gauss point velocity", max_u)
 
         h0_with_bc, z0_with_bc, q0_with_bc, \
                 h1_with_bc, z1_with_bc, q1_with_bc, \
@@ -339,7 +347,10 @@ def main():
             h1_int_with_bc[i] = h1_with_bc[i] + dt*L1_temp[0]
             q1_int_with_bc[i] = q1_with_bc[i] + dt*L1_temp[1]
 
-            if h0_int_with_bc[i] <= tolh:
+            h_G1 = h0_int_with_bc[i] + h1_int_with_bc[i] # Eastern Gauss point
+            h_G2 = h0_int_with_bc[i] - h1_int_with_bc[i] # Western Gauss point
+
+            if max(h_G1, h_G2) <= tolh:
                 q0_int_with_bc[i] = 0.0
                 q1_int_with_bc[i] = 0.0
 
@@ -416,12 +427,15 @@ def main():
             q1_new_with_bc[i] = 0.5*(q1_with_bc[i] + q1_int_with_bc[i]
                     + dt*L1_temp[1])
 
-            if h0_new_with_bc[i] <= tolh:
+            h_G1 = h0_new_with_bc[i] + h1_new_with_bc[i] # Eastern Gauss ponew
+            h_G2 = h0_new_with_bc[i] - h1_new_with_bc[i] # Western Gauss ponew
+
+            if max(h_G1, h_G2) <= tolh:
                 q0_new_with_bc[i] = 0.0
                 q1_new_with_bc[i] = 0.0
 
         # calculate next timestep
-        dt = 1e9
+        dt = 5
         for i in range(elements):
             h0[i] = h0_new_with_bc[i+1]
             q0[i] = q0_new_with_bc[i+1]
@@ -433,30 +447,30 @@ def main():
             q_G1 = q0[i] - q1[i]
             q_G2 = q0[i] + q1[i]
 
-            if h0[i] <= tolh:
+            if max(h_G1, h_G2) <= tolh:
                 q0[i] = 0.0
                 q1[i] = 0.0
                 continue
             else:
-                if h0[i] > tolh:
-                    u0 = q0[i]/h0[i]
-                    dt0 = CFL*dx/(abs(u0)+sqrt(g*h0[i]))
-                    dt = min(dt, dt0)
-                #if h_G1 > tolh:
-                #    u_G1 = q_G1/h_G1
-                #    dt_G1 = CFL*dx/(abs(u_G1)+sqrt(g*h_G1))
-                #    dt = min(dt, dt_G1)
+                #if h0[i] > tolh:
+                #    u0 = q0[i]/h0[i]
+                #    dt0 = CFL*dx/(abs(u0)+sqrt(g*h0[i]))
+                #    dt = min(dt, dt0)
+                if h_G1 > tolh:
+                    u_G1 = q_G1/h_G1
+                    dt_G1 = CFL*dx/(abs(u_G1)+sqrt(g*h_G1))
+                    dt = min(dt, dt_G1)
 
-                #if h_G2 > tolh:
-                #    u_G2 = q_G2/h_G2
-                #    dt_G2 = CFL*dx/(abs(u_G2)+sqrt(g*h_G2))
-                #    dt = min(dt, dt_G2)
+                if h_G2 > tolh:
+                    u_G2 = q_G2/h_G2
+                    dt_G2 = CFL*dx/(abs(u_G2)+sqrt(g*h_G2))
+                    dt = min(dt, dt_G2)
 
         h0_max = max(h0)
         hmin_limiter = h0_max*5.0/100.0
 
         c += 1
-        if c % 20 == 0:
+        if c % 1 == 0:
             plot(xx, x_interface, z0, z1, h0, h1, q0, q1, tolh)
 
     plt.show(block=True)
